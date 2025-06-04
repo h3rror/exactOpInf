@@ -2,9 +2,7 @@
 
 This is the Matlab implementation of the numerical experiments reported in: 
 
-[arXiv citation]
-
-[Bibtex]
+https://arxiv.org/abs/2506.01244
 
 Call the scripts <tt>chafee_infante.m</tt>, <tt>ice_sheet.m</tt> and to <tt>burgers.m</tt> to perform the numerical experiments.
 
