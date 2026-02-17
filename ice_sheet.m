@@ -18,14 +18,21 @@ t_end = 2;
 nt = t_end/dt;
 
 is = [3 8];
-I = speye(N);
-D = spdiags([-ones(N,1) ones(N,1)], [-1 1],N,N); % first-order central finite difference
-D(1,1) = -1; D(end,end) = 1; % homogeneous Neumann BC
-D = D/(2*dx);
 
-F3 = @(x1,x2,x3) D*((D*x1).*x2.*x3);
+%% discretization
+% % % x lives on a grid with N points, 
+% % % D1 maps to the N+1 points between and around those points
+% % % D2 maps from the N+1 between-points back to the grid of x
+D1 = 1/dx*spdiags([-ones(N,1) ones(N,1)],[-1 0],N+1,N); % first-order finite difference N -> N+1
+D1(1,1) = 0; D1(end,end) = 0; % homogeneous Neumann BC
+D2 = 1/dx*spdiags([-ones(N+1,1) ones(N+1,1)],[0 1],N,N+1); % first-order finite difference N+1 -> N
+I = 1/2*spdiags([ones(N,1) ones(N,1)],[-1 0],N+1,N); % interpolate from N to N+1 points
+
+F3 = @(x1,x2,x3) D2*((D1*x1).*(I*(x2.*x3)));
 F8 = @(x1,x2,x3,x4,x5,x6,x7,x8) ...
-        D*((D*x1).*(D*x2).*(D*x3).*x4.*x5.*x6.*x7.*x8);
+        D2*((D1*x1).*(D1*x2).*(D1*x3).*(I*(x4.*x5.*x6.*x7.*x8)));
+
+%%
 F3X = @(X) F3(X(:,1),X(:,2),X(:,3));
 F8X = @(X) F8(X(:,1),X(:,2),X(:,3),X(:,4),X(:,5),X(:,6),X(:,7),X(:,8));
 
@@ -39,12 +46,7 @@ fx0 = @(xs) 1e-2 + 630*(xs/2000+.25).^4.*(xs/2000-.75).^4;
 x0 = fx0(xs);
 u_val = @(t) 0; % U_val
 
-%%
-f3 = @(x) D*((D*x).*x.*x);
-f8 = @(x) D*((D*x).^3.*x.^5);
-
-
-% coefficients
+%% coefficients
 rho = 910;
 g = 9.81;
 beta = 1e16;
@@ -53,7 +55,7 @@ gamma = 1e-4;
 c1 = rho*g/beta;          % 8.9271e-13
 c2 = 2*gamma*rho^3*g^3/5; % 2.845713606598e7
 
-f = @(x,u) c1*f3(x) + c2*f8(x);
+f = @(x,u) c1*F3(x,x,x) + c2*F8(x,x,x,x,x,x,x,x);
 
 % generatePODdata = true 
 generatePODdata = false
@@ -104,12 +106,35 @@ end
 
 close(writerObj);
 
+%% state plots
+figure; hold on
+plot(X_b(:,1))
+plot(X_b(:,2))
+plot(X_b(:,3))
+plot(X_b(:,5))
+plot(X_b(:,10))
+plot(X_b(:,100))
+plot(X_b(:,end))
+
 %% construct ROM basis via POD
 X_POD = X_b(:,1:2001);
 
 [V,S,~] = svd(X_b,'econ');
 n = 7;
 Vn = V(:,1:n);
+
+%% singular value decay
+figure
+semilogy(diag(S)/S(1,1))
+title("singular value decay")
+
+%% plot POD modes
+figure; hold on
+for i = 1:n
+% for i = n:n
+    plot(Vn(:,i))
+end
+
 
 %% generate rank-sufficient snapshot data
 
@@ -121,6 +146,16 @@ U0 = XU(1:Nu,:);
 
 nf = size(XU,2);
 tX1 = zeros(n,nf);
+
+%% plot initial conditions
+
+figure
+hold on
+for i = 1:nf
+    plot(Vn*tX0(:,i))
+end
+
+%%
 
 
 % compute time step estimate (3.10)
@@ -134,7 +169,7 @@ end
 
 dot_tX = (tX1-tX0)/dt1;
 
-tX0 = int32(full(tX0));
+tX0 = int32(full(tX0)); % reduce memory demand
 U0 = int32(full(U0));
 
 %% construct intrusive operators
@@ -153,6 +188,9 @@ A8_errors = zeros(nn,1);
 
 O_errors = zeros(nn,1);
 condsD = zeros(nn,1);
+
+h_ROM_state_error = zeros(nn,1);
+t_ROM_state_error = zeros(nn,1);
 
 n_is__ = n_is(n,is);
 
@@ -183,6 +221,45 @@ for j = 1:nn
     O_errors(j) = norm(O-tO_,"fro")/norm(tO_,"fro");
 
     condsD(j) = condD;
+
+    computeROMStateError = true
+    % computeROMStateError = false
+    if computeROMStateError
+        %% compute avg ROM state error
+        Vn_ = Vn(:,1:n_);
+        [~,~,un_3] = reduced_coordinates(n_,3);
+        [~,~,un_8] = reduced_coordinates(n_,8);
+        tf = @(tx,u) tO_*[uniquepower(tx,3,un_3);uniquepower(tx,8,un_8)];
+        hO_ = O;
+        hf = @(hx,u) hO_*[uniquepower(hx,3,un_3);uniquepower(hx,8,un_8)];
+
+        tX_b = zeros(n_,nt+1);
+        hX_b = zeros(n_,nt+1);
+        % U_b = zeros(Nu,nt+1);
+        t = 0;
+        tx = Vn_'*x0;
+        hx = Vn_'*x0;
+        u = U_b(:,1);
+
+        tX_b(:,1) = tx;
+        hX_b(:,1) = hx;
+        % U_b(:,1) = u;
+
+        for i=1:nt
+            tx = single_step(tx,u,dt,tf);
+            hx = single_step(hx,u,dt,hf);
+
+            t = t + dt;
+            u = U_b(:,i);
+
+            tX_b(:,i+1) = tx;
+            hX_b(:,i+1) = hx;
+            % U_b(:,i+1) = u;
+        end
+
+        t_ROM_state_error(j) = norm(Vn_*tX_b - X_b,"fro")/norm(X_b,"fro");
+        h_ROM_state_error(j) = norm(Vn_*hX_b - X_b,"fro")/norm(X_b,"fro");
+    end
 end
 
 figure
@@ -194,6 +271,25 @@ xlabel("ROM dimension")
 set(gca, 'YScale', 'log')
 
 legend("show")
+box on
+
+if computeROMStateError
+    figure
+    hold on
+    semilogy(ns,h_ROM_state_error,'x-', 'LineWidth', 2,'DisplayName',"exactOpInf", "MarkerSize",10)
+    semilogy(ns,t_ROM_state_error,'+:', 'LineWidth', 2,'DisplayName',"intrusive", "MarkerSize",10)
+    ylabel("avg rel error of states","Interpreter","latex", "FontSize",15)
+    xlabel("ROM dimension","Interpreter","latex", "FontSize",15)
+    set(gca, 'YScale', 'log')
+    grid on
+    legend("show","Interpreter","latex", "FontSize",12)
+    legend("Location","northeast")
+    % ylim([1e-17 1e-15])
+    box on
+
+    savefig("figures/rom_state_error_ice_sheet.fig")
+    exportgraphics(gcf,"figures/rom_state_error_ice_sheet.pdf")
+end
 %%
 
 save("data/data_icesheet","O_errors","condsD");

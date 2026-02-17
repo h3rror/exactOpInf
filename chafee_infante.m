@@ -9,11 +9,15 @@ N = 128;
 % N = 12;
 % N = 64;
 
+dx = 1/N;
+
 %% Chafee-Infante as in https://doi.org/10.1137/19M1292448 combined with 
 % setup of Allen-Cahn in https://doi.org/10.1016/j.cma.2022.115836
 
 dt = 1e-5;
 % t_end = 4;
+% t_end = 1;
+% t_end = 2;
 t_end = 0.1;
 % t_end = 1*dt;
 % t_end = 20*dt;
@@ -21,27 +25,25 @@ nt = round(t_end/dt);
 
 is = [1 2 3];
 A1 = diag(ones(N-1,1),-1) -eye(N);
-A1 = (A1+A1')*N^2;
+A1 = (A1+A1')/dx^2;
 A1 = A1 + eye(N); % additional linear term missing in Allen-Cahn description
-% JN3 = power2kron(N,3); % J_N^(3)
-% A3 = vecwise_kron(eye(N),3)';
-% A3 = A3*JN3;
+
 B = zeros(N,1);
 B(1) = 1/dt;
 Nu = 1;
 
 % boundary conditions
 BC = eye(N);
+
 % x(0,t) = u(t)
 A1(1,:) = 0;
 A1(1,1) = -1/dt;
-% A3(1,:) = 0;
 BC(1,:) = 0;
 
-% ddt x(1,t) = 0;
-A1(end,:) = 0;
-% A3(end,:) = 0;
-BC(end,:) = 0;
+% ddxi x(1,t) = 0
+A1(end,end) = -1/dx^2 + 1;
+
+
 
 F1 = @(x1) A1*x1;
 F3 = @(x1,x2,x3) -BC*(x1.*x2.*x3);
@@ -49,14 +51,10 @@ F3 = @(x1,x2,x3) -BC*(x1.*x2.*x3);
 F1X = @(X) F1(X(:,1));
 F3X = @(X) F3(X(:,1),X(:,2),X(:,3));
 
-% IN3 = kron2power(N,3); % I_N^(3)
-% f = @(x,u) A1*x + A3*IN3*vecwise_kron(x,3) + B*u; % slow!
 f = @(x,u) F1(x) + F3(x,x,x) + B*u;
 
 x0 = zeros(N,1);
 u_val = @(t) 10*(sin(pi*t)+1); % U_val
-% u_val = @(t) 10*(cos(pi*t)+1); % U_val
-
 
 %% generate ROM basis construction data
 X_b = zeros(N,nt+1);
@@ -77,10 +75,41 @@ for i=1:nt
     X_b(:,i+1) = x;
     U_b(:,i+1) = u;
 end
+
+
+%% state plots
+figure; hold on
+plot(X_b(:,1))
+plot(X_b(:,2))
+plot(X_b(:,3))
+plot(X_b(:,5))
+plot(X_b(:,10))
+plot(X_b(:,100))
+plot(X_b(:,end))
+
+
+%% input signal plots
+figure
+ts = linspace(0,t_end,t_end/dt);
+plot(U_b)
+
 %% construct ROM basis via POD
 [V,S,~] = svd(X_b,'econ');
 n = 14;
 Vn = V(:,1:n);
+
+%% singular value decay
+figure
+semilogy(diag(S)/S(1,1))
+title("singular value decay")
+
+%% plot POD modes
+figure; hold on
+for i = 1:n
+% for i = n:n
+    plot(Vn(:,i))
+end
+legend("show")
 
 %% construct intrusive operators
 tA1 = Vn'*A1*Vn;
@@ -105,6 +134,16 @@ U0 = XU(1:Nu,:);
 nf = size(XU,2);
 tX1 = zeros(n,nf);
 
+%% plot initial conditions
+
+figure
+hold on
+for i = 1:nf
+    plot(Vn*tX0(:,i))
+end
+
+%%
+
 % compute time step estimate (3.10)
 dt1 = dt_estimate(X_b,U_b,Vn(:,1),dt,is);
 
@@ -124,10 +163,14 @@ A3_errors = zeros(nn,1);
 O_errors = zeros(nn,1);
 condsD = zeros(nn,1);
 
+h_ROM_state_error = zeros(nn,1);
+t_ROM_state_error = zeros(nn,1);
+
 n_is__ = n_is(n,is);
 offset = cumsum(n_is__);
 
 for j = 1:nn
+% for j = nn:nn
     n_ = ns(j);
     n_is_ = n_is(n_,is);
     nf_ = sum(n_is_)+Nu;
@@ -143,50 +186,80 @@ for j = 1:nn
     U0_ = U0(:,ks);
 
     [O,A_inds,B_inds,condD] = opinf(dot_tX_,tX0_,U0_,is,true);
-    % hA1 = O(:,A_inds(1,1):A_inds(1,2));
-    % hA3 = O(:,A_inds(2,1):A_inds(2,2));
-    % hB = O(:,B_inds(1):B_inds(2));
-    % 
-    % B_errors(j) = norm(tB(1:n_,:) - hB);
-    % A1_errors(j) = norm(tA1(1:n_,1:n_is_(1)) - hA1);
-    % A3_errors(j) = norm(tA3(1:n_,1:n_is_(2)) - hA3); 
-
-    % tB_ = tB(1:n_,:);
-    % tA1_ = tA1(1:n_,1:n_is_(1));
-    % tA2_ = tA2(1:n_,1:n_is_(2));
-    % tA3_ = tA3(1:n_,1:n_is_(3));
-    % 
-    % tO_ = [tB_ tA1_ tA2_ tA3_];
 
     tO_ = tO(1:n_,ks);
 
     O_errors(j) = norm(O-tO_,"fro")/norm(tO_,"fro");
 
     condsD(j) = condD;
+
+    % computeROMStateError = true
+    computeROMStateError = false
+    if computeROMStateError
+        %% compute avg ROM state error
+        Vn_ = Vn(:,1:n_);
+        [~,~,un_2] = reduced_coordinates(n_,2);
+        [~,~,un_3] = reduced_coordinates(n_,3);
+        tf = @(tx,u) tO_*[u;tx;uniquepower(tx,2,un_2);uniquepower(tx,3,un_3)];
+        hO_ = O;
+        hf = @(hx,u) hO_*[u;hx;uniquepower(hx,2,un_2);uniquepower(hx,3,un_3)];
+
+        tX_t = zeros(n_,nt+1);
+        hX_t = zeros(n_,nt+1);
+        % U_b = zeros(Nu,nt+1);
+        t = 0;
+        tx = Vn_'*x0;
+        hx = Vn_'*x0;
+        u = U_b(:,1);
+
+        tX_t(:,1) = tx;
+        hX_t(:,1) = hx;
+        % U_b(:,1) = u;
+
+        for i=1:nt
+            tx = single_step(tx,u,dt,tf);
+            hx = single_step(hx,u,dt,hf);
+
+            t = t + dt;
+            u = U_b(:,i);
+
+            tX_t(:,i+1) = tx;
+            hX_t(:,i+1) = hx;
+        end
+
+        t_ROM_state_error(j) = norm(Vn_*tX_t - X_b,"fro")/norm(X_b,"fro");
+        h_ROM_state_error(j) = norm(Vn_*hX_t - X_b,"fro")/norm(X_b,"fro");
+    end
 end
 
 figure
 hold on
-semilogy(ns,A1_errors,'x-', 'LineWidth', 2,'DisplayName',"A_1")
-semilogy(ns,A3_errors,'x-', 'LineWidth', 2,'DisplayName',"A_3")
-semilogy(ns,B_errors,'x-', 'LineWidth', 2,'DisplayName',"B")
-ylabel("operator error")
-xlabel("ROM dimension")
-set(gca, 'YScale', 'log')
-
-legend("show")
-
-figure
-hold on
 semilogy(ns,O_errors,'x-', 'LineWidth', 2,'DisplayName',"O chafee-infante")
-
 ylabel("relative operator error")
 xlabel("ROM dimension")
 set(gca, 'YScale', 'log')
 
 legend("show")
+box on
 
 save("data/data_chafee_infante","O_errors","condsD");
+
+if computeROMStateError
+    figure
+    hold on
+    semilogy(ns,h_ROM_state_error,'x-', 'LineWidth', 2,'DisplayName',"exactOpInf", "MarkerSize",10)
+    semilogy(ns,t_ROM_state_error,'+:', 'LineWidth', 2,'DisplayName',"intrusive", "MarkerSize",10)
+    ylabel("avg rel error of states","Interpreter","latex", "FontSize",15)
+    xlabel("ROM dimension","Interpreter","latex", "FontSize",15)
+    set(gca, 'YScale', 'log')
+    grid on
+    legend("show","Interpreter","latex", "FontSize",12)
+    legend("Location","northeast")
+    % ylim([1e-17 1e-15])
+    box on
+    savefig("figures/rom_state_error_chafee_infante.fig")
+    exportgraphics(gcf,"figures/rom_state_error_chafee_infante.pdf")
+end
 
 
 %% FOM solver running for one time step
