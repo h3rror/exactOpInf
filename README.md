@@ -13,3 +13,5 @@ Call the scripts <tt>chafee_infante.m</tt>, <tt>ice_sheet.m</tt> and to <tt>burg
 Otherwise, if the boolean <tt>generatePODdata</tt> is set to  <tt>false</tt>, the POD snapshot data is loaded and <tt>ice_sheet.m</tt> takes approx. 3 minutes.
 
 Call <tt>plot_operator_errors.m</tt> to generate the operator error and condition number plots.
+
+Set the boolean <tt>computeROMStateError</tt> to <tt>true</tt> to compute average ROM state errors in <tt>chafee_infante.m</tt>, <tt>ice_sheet.m</tt> and to <tt>burgers.m</tt>. These computations increase the computation times by a few minutes.
